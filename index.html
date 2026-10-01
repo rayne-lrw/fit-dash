@@ -1,4 +1,15 @@
-<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0a0e13">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
 <title>Fit 戰情面板</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@400;600;700&family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -100,7 +111,8 @@ details summary{cursor:pointer;color:var(--dim);font-size:13px}
 }
 @media (max-width:420px){ .tile .val .num{font-size:36px} }
 </style>
-</head><body>
+</head>
+<body>
 
 <header class="bar">
   <div class="brand"><b>FIT GK5</b><span>L15B · CVT · OBD-II</span></div>
@@ -544,4 +556,13 @@ $("btnFs").onclick = async ()=>{ try{ document.fullscreenElement ? await documen
 startDemo();
 })();
 </script>
-</body></html>
+<script>
+if ("serviceWorker" in navigator && location.protocol === "https:") {
+  navigator.serviceWorker.register("sw.js").then(() => {
+    const el = document.getElementById("log");
+    if (el) el.textContent += (el.textContent ? "\n" : "") + "離線模式已就緒：之後沒有網路也能打開";
+  }).catch(() => {});
+}
+</script>
+</body>
+</html>

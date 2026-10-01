@@ -1,0 +1,547 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Fit 戰情面板</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@400;600;700&family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: landscape cockpit for a head unit — status bar on top, tach dial left, telemetry tiles right, trip + DTC strip below. Dark-only by design (night driving). */
+:root{
+  --bg:#0a0e13; --panel:#111921; --panel2:#16212b; --line:#22313e;
+  --fg:#e7eef4; --dim:#7d91a3; --accent:#5ec4ff;
+  --ok:#38d996; --warn:#ffb020; --crit:#ff4d4f;
+  --f-num:"Saira Condensed","Roboto Condensed","Arial Narrow",sans-serif;
+  --f-ui:"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{min-height:100%}
+body{background:var(--bg);color:var(--fg);font-family:var(--f-ui);margin:0;padding-inline:16px;padding-block:12px 20px;font-size:14px;line-height:1.45}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.num{font-family:var(--f-num);font-variant-numeric:tabular-nums;letter-spacing:.01em}
+.lbl{font-size:12px;color:var(--dim);letter-spacing:.06em}
+
+/* top bar */
+.bar{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;margin-bottom:12px}
+.brand{display:flex;align-items:baseline;gap:10px;margin-right:auto}
+.brand b{font-family:var(--f-num);font-size:24px;font-weight:700;letter-spacing:.08em}
+.brand span{color:var(--dim);font-size:12px;letter-spacing:.08em}
+.pill{display:inline-flex;align-items:center;gap:7px;padding:5px 12px;border-radius:999px;background:var(--panel2);border:1px solid var(--line);font-size:13px}
+.pill i{width:8px;height:8px;border-radius:50%;background:var(--dim)}
+.pill[data-s="on"] i{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+.pill[data-s="busy"] i{background:var(--warn);animation:blink 1s infinite}
+.pill[data-s="demo"] i{background:var(--accent)}
+.pill[data-s="err"] i{background:var(--crit)}
+@keyframes blink{50%{opacity:.25}}
+.btn{padding:8px 14px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);font-size:14px}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent);color:#04121c;border-color:var(--accent);font-weight:700}
+.btn.danger{border-color:color-mix(in srgb,var(--crit) 60%,var(--line));color:var(--crit)}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+
+/* alert strip */
+.alerts{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;min-height:34px}
+.chip{display:inline-flex;align-items:center;gap:8px;padding:6px 12px;border-radius:6px;font-size:14px;font-weight:500;background:var(--panel)}
+.chip::before{content:"";width:8px;height:8px;border-radius:2px;background:currentColor}
+.chip.ok{color:var(--ok)} .chip.info{color:var(--accent)}
+.chip.warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 12%,var(--panel))}
+.chip.crit{color:var(--crit);background:color-mix(in srgb,var(--crit) 16%,var(--panel));animation:pulse 1.2s infinite}
+@keyframes pulse{50%{background:color-mix(in srgb,var(--crit) 30%,var(--panel))}}
+@media (prefers-reduced-motion:reduce){.chip.crit,.pill i{animation:none}}
+
+/* main grid */
+.grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:12px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}
+.dial{display:flex;flex-direction:column;gap:10px;min-width:0}
+.dial svg{width:100%;max-width:520px;margin-inline:auto;display:block;height:auto}
+.bars{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.hbar .top{display:flex;justify-content:space-between;align-items:baseline}
+.hbar .top .num{font-size:22px;font-weight:600}
+.track{height:8px;border-radius:4px;background:var(--panel2);overflow:hidden;margin-top:4px}
+.track b{display:block;height:100%;width:0;background:var(--accent);transition:width .2s}
+
+.tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-content:start}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px 10px;display:flex;flex-direction:column;gap:2px;min-width:0;transition:background .3s,border-color .3s}
+.tile .head{display:flex;justify-content:space-between;align-items:center;gap:6px}
+.tile .st{font-size:11px;padding:1px 7px;border-radius:4px;background:var(--panel2);color:var(--dim);white-space:nowrap}
+.tile .val{display:flex;align-items:baseline;gap:6px}
+.tile .val .num{font-size:44px;font-weight:600;line-height:1.05}
+.tile .val small{color:var(--dim);font-size:14px}
+.tile svg{width:100%;height:26px;display:block}
+.tile[data-l="warn"]{border-color:color-mix(in srgb,var(--warn) 55%,var(--line))}
+.tile[data-l="warn"] .val .num,.tile[data-l="warn"] .st{color:var(--warn)}
+.tile[data-l="crit"]{border-color:var(--crit);background:color-mix(in srgb,var(--crit) 10%,var(--panel))}
+.tile[data-l="crit"] .val .num,.tile[data-l="crit"] .st{color:var(--crit)}
+.tile[data-l="info"] .st{color:var(--accent)}
+.tile[data-l="ok"] .st{color:var(--ok)}
+
+.lower{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);gap:12px}
+.trip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.trip .num{font-size:28px;font-weight:600;display:block}
+.sec-h{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.sec-h h2{font-size:15px;margin:0;font-weight:700;letter-spacing:.04em}
+.dtc-list{display:flex;flex-direction:column;gap:6px;min-height:40px}
+.dtc{display:flex;gap:12px;align-items:baseline;padding:6px 10px;background:var(--panel2);border-radius:6px}
+.dtc code{font-family:var(--f-mono);color:var(--warn);font-weight:500}
+.mil{font-size:13px;color:var(--dim)}
+.mil.on{color:var(--warn);font-weight:700}
+.confirm{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;padding:8px 10px;border-radius:6px;background:color-mix(in srgb,var(--crit) 10%,var(--panel2));font-size:13px}
+.muted{color:var(--dim);font-size:13px}
+
+details{margin-top:12px}
+details summary{cursor:pointer;color:var(--dim);font-size:13px}
+.log{font-family:var(--f-mono);font-size:12px;color:var(--dim);max-height:160px;overflow:auto;white-space:pre-wrap;word-break:break-all;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px;margin-top:8px}
+.help{color:var(--dim);font-size:13px;max-width:72ch}
+.help li{margin-block:3px}
+
+@media (max-width:820px){
+  .grid,.lower{grid-template-columns:minmax(0,1fr)}
+  .trip{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media (max-width:420px){ .tile .val .num{font-size:36px} }
+</style>
+</head><body>
+
+<header class="bar">
+  <div class="brand"><b>FIT GK5</b><span>L15B · CVT · OBD-II</span></div>
+  <span class="pill" id="pill" data-s="off"><i></i><span id="pillTxt">未連線</span></span>
+  <button class="btn primary" id="btnConn">連接 OBD</button>
+  <button class="btn" id="btnDemo">示範模式</button>
+  <button class="btn" id="btnFs" title="全螢幕">全螢幕</button>
+</header>
+
+<div class="alerts" id="alerts"></div>
+
+<main class="grid">
+  <section class="panel dial">
+    <svg viewBox="0 0 300 236" role="img" aria-label="轉速表與車速">
+      <g id="ticks"></g>
+      <path id="arcBg" fill="none" stroke="#1d2a35" stroke-width="14" stroke-linecap="butt"/>
+      <path id="arcRed" fill="none" stroke="#ff4d4f" stroke-opacity=".55" stroke-width="14"/>
+      <path id="arcVal" fill="none" stroke="#5ec4ff" stroke-width="14"/>
+      <text x="150" y="146" text-anchor="middle" class="num" id="spd" fill="#e7eef4" font-size="76" font-weight="700" font-family="Saira Condensed, Arial Narrow, sans-serif">0</text>
+      <text x="150" y="168" text-anchor="middle" fill="#7d91a3" font-size="13" letter-spacing="2">km/h</text>
+      <text x="150" y="204" text-anchor="middle" id="rpmTxt" fill="#5ec4ff" font-size="22" font-weight="600" font-family="Saira Condensed, Arial Narrow, sans-serif">0</text>
+      <text x="150" y="220" text-anchor="middle" fill="#7d91a3" font-size="10" letter-spacing="2">RPM ×1</text>
+    </svg>
+    <div class="bars">
+      <div class="hbar"><div class="top"><span class="lbl">節氣門開度</span><span><span class="num" id="tpsV">--</span> <small class="muted">%</small></span></div><div class="track"><b id="tpsB"></b></div></div>
+      <div class="hbar"><div class="top"><span class="lbl">進氣歧管壓力</span><span><span class="num" id="mapV">--</span> <small class="muted">kPa</small></span></div><div class="track"><b id="mapB"></b></div></div>
+    </div>
+  </section>
+
+  <section class="tiles" id="tiles"></section>
+
+  <section class="lower">
+    <div class="panel">
+      <div class="sec-h"><h2>本趟行程</h2><button class="btn" id="btnReset">歸零</button></div>
+      <div class="trip">
+        <div><span class="lbl">里程</span><span class="num" id="tDist">0.0</span><small class="muted">km</small></div>
+        <div><span class="lbl">耗油</span><span class="num" id="tFuel">0.00</span><small class="muted">L</small></div>
+        <div><span class="lbl">行駛時間</span><span class="num" id="tTime">0:00</span></div>
+        <div><span class="lbl">平均車速</span><span class="num" id="tAvg">0</span><small class="muted">km/h</small></div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="sec-h">
+        <h2>故障碼 DTC <span class="mil" id="mil">引擎燈：—</span></h2>
+        <div style="display:flex;gap:8px">
+          <button class="btn" id="btnDtc" disabled>讀取</button>
+          <button class="btn danger" id="btnClr" disabled>清除</button>
+        </div>
+      </div>
+      <div class="dtc-list" id="dtcList"><span class="muted">連線後按「讀取」查詢 ECU 故障碼。</span></div>
+      <div class="confirm" id="clrConfirm" hidden>
+        <span>清除後引擎燈會熄滅、就緒監測歸零，驗車前不建議清除。確定？</span>
+        <button class="btn danger" id="clrYes">確定清除</button>
+        <button class="btn" id="clrNo">取消</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<details>
+  <summary>使用說明與硬體需求</summary>
+  <ul class="help">
+    <li>需要 <b>BLE（藍牙 4.0 低功耗）</b> 版 ELM327 接頭，例如 Vgate iCar Pro BLE、OBDLink CX、Veepeak OBDCheck BLE。傳統藍牙（SPP）與 WiFi 版接頭瀏覽器無法連線。</li>
+    <li>車機需能執行 Android Chrome（或 Edge）。iPhone 的 Safari 不支援 Web Bluetooth，可改用 Bluefy 瀏覽器。</li>
+    <li>OBD 座在駕駛座方向盤左下方。插上接頭、發動引擎後按「連接 OBD」，在清單中選擇接頭名稱（常見為 OBDII、IOS-Vlink、VEEPEAK）。</li>
+    <li>GK5 引擎使用 MAP 進氣壓力計算，油耗為依轉速、進氣壓力、進氣溫度推算的估計值，誤差約 ±10%。</li>
+    <li>電壓讀的是接頭端電壓（ATRV）。發動中正常為 13.5–14.7 V，熄火靜置約 12.4–12.8 V。</li>
+  </ul>
+  <div class="log" id="log"></div>
+</details>
+
+<script>
+(() => {
+"use strict";
+const $ = id => document.getElementById(id);
+const C = {fg:"#e7eef4",dim:"#7d91a3",accent:"#5ec4ff",ok:"#38d996",warn:"#ffb020",crit:"#ff4d4f",grid:"#22313e"};
+
+/* ---------- vehicle constants (GK5 L15B) ---------- */
+const DISP = 1.496, VE = 0.85, AFR = 14.7, FUEL_D = 745; // L, -, -, g/L
+const REDLINE = 6800, RPM_MAX = 8000;
+
+/* ---------- state ---------- */
+const S = {rpm:0,speed:0,load:null,coolant:null,iat:null,map:null,maf:null,tps:null,volt:null,mil:null,dtcCount:null};
+const HIST = {coolant:[],volt:[],iat:[],load:[],inst:[],avg:[]};
+const trip = {dist:0,fuel:0,time:0,last:0};
+let mode = "off"; // off | busy | on | demo
+let elm = null, demoTimer = null, wakeLock = null, hasMAF = false;
+let disp = {rpm:0}; // smoothed
+
+/* ---------- log ---------- */
+const logEl = $("log"); const logLines = [];
+function log(s){ logLines.push(new Date().toTimeString().slice(0,8)+"  "+s); if(logLines.length>120) logLines.shift(); logEl.textContent = logLines.join("\n"); logEl.scrollTop = 1e9; }
+
+/* ---------- tach geometry ---------- */
+const CX=150, CY=128, R=112, A0=-125, A1=125;
+const pt = (a,r=R) => { const t=a*Math.PI/180; return [CX+r*Math.sin(t), CY-r*Math.cos(t)]; };
+const rpmA = v => A0 + (A1-A0)*Math.min(Math.max(v,0),RPM_MAX)/RPM_MAX;
+function arc(a0,a1,r=R){ if(a1-a0<0.2) a1=a0+0.2; const [x0,y0]=pt(a0,r),[x1,y1]=pt(a1,r); return `M${x0.toFixed(2)} ${y0.toFixed(2)} A${r} ${r} 0 ${a1-a0>180?1:0} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`; }
+$("arcBg").setAttribute("d",arc(A0,A1));
+$("arcRed").setAttribute("d",arc(rpmA(REDLINE),A1));
+(function ticks(){
+  let h="";
+  for(let k=0;k<=RPM_MAX;k+=500){
+    const a=rpmA(k), major=k%1000===0, [x0,y0]=pt(a,R-12), [x1,y1]=pt(a,R-(major?24:18));
+    const col = k>=REDLINE?C.crit:(major?C.fg:C.dim);
+    h+=`<line x1="${x0.toFixed(1)}" y1="${y0.toFixed(1)}" x2="${x1.toFixed(1)}" y2="${y1.toFixed(1)}" stroke="${col}" stroke-width="${major?2:1}"/>`;
+    if(major){ const [tx,ty]=pt(a,R-36); h+=`<text x="${tx.toFixed(1)}" y="${(ty+5).toFixed(1)}" text-anchor="middle" fill="${col}" font-size="15" font-family="Saira Condensed, Arial Narrow, sans-serif" font-weight="600">${k/1000}</text>`; }
+  }
+  const [lx,ly]=pt(0,R-56);
+  h+=`<text x="${lx}" y="${ly}" text-anchor="middle" fill="${C.dim}" font-size="9" letter-spacing="1.5">×1000 r/min</text>`;
+  $("ticks").innerHTML=h;
+})();
+
+/* ---------- tiles ---------- */
+const TILES = [
+  {k:"coolant",label:"水溫",unit:"°C",fmt:v=>v.toFixed(0),lo:40,hi:120},
+  {k:"volt",label:"電瓶電壓",unit:"V",fmt:v=>v.toFixed(1),lo:11,hi:15.5},
+  {k:"iat",label:"進氣溫度",unit:"°C",fmt:v=>v.toFixed(0),lo:0,hi:80},
+  {k:"load",label:"引擎負載",unit:"%",fmt:v=>v.toFixed(0),lo:0,hi:100},
+  {k:"inst",label:"瞬時油耗",unit:"km/L",fmt:v=>v.toFixed(1),lo:0,hi:30},
+  {k:"avg",label:"平均油耗",unit:"km/L",fmt:v=>v.toFixed(1),lo:0,hi:30},
+];
+$("tiles").innerHTML = TILES.map(t=>`
+  <div class="tile" id="t_${t.k}" data-l="">
+    <div class="head"><span class="lbl">${t.label}</span><span class="st" id="s_${t.k}">—</span></div>
+    <div class="val"><span class="num" id="v_${t.k}">--</span><small id="u_${t.k}">${t.unit}</small></div>
+    <svg viewBox="0 0 100 26" preserveAspectRatio="none" aria-hidden="true">
+      <path id="a_${t.k}" fill="${C.accent}" fill-opacity=".12"/>
+      <polyline id="p_${t.k}" fill="none" stroke="${C.accent}" stroke-width="1.4" vector-effect="non-scaling-stroke"/>
+    </svg>
+  </div>`).join("");
+
+/* ---------- fuel ---------- */
+function fuelLph(){
+  if(!S.rpm) return 0;
+  // Decel fuel cut: closed throttle, high rpm, very low load
+  if(S.load!=null && S.load<10 && S.rpm>1300 && S.speed>15) return 0;
+  let maf = hasMAF ? S.maf : null;
+  if(maf==null && S.map!=null){
+    const T = (S.iat ?? 30) + 273.15;
+    maf = (S.rpm/120) * (S.map*DISP/(8.314*T)) * 28.97 * VE; // g/s, speed-density
+  }
+  if(maf==null) return null;
+  return maf*3600/(AFR*FUEL_D);
+}
+
+/* ---------- evaluation ---------- */
+function level(k,v){
+  const run = S.rpm>400;
+  switch(k){
+    case "coolant": if(v>=108) return ["crit","過熱"]; if(v>=102) return ["warn","偏高"]; if(v<70) return ["info","暖車中"]; return ["ok","正常"];
+    case "volt": if(v<11.8||v>15.2) return ["crit",v>15.2?"過充":"電壓過低"]; if(run&&v<13.2) return ["warn","充電偏低"]; if(!run&&v<12.3) return ["warn","電瓶偏弱"]; return ["ok",run?"充電中":"正常"];
+    case "iat": if(v>=65) return ["warn","偏高"]; return ["ok","正常"];
+    case "load": if(v>=85) return ["info","高負載"]; return ["ok","—"];
+    case "inst": return ["", S.speed<3 ? "怠速 L/h" : "即時"];
+    case "avg": return ["", trip.dist<0.5 ? "累積中" : "本趟"];
+  }
+  return ["",""];
+}
+
+function pushHist(k,v){ if(v==null||!isFinite(v)) return; const a=HIST[k]; a.push(v); if(a.length>90) a.shift(); }
+
+function spark(k,lo,hi){
+  const a=HIST[k]; if(a.length<2) return;
+  const n=a.length, mn=Math.min(lo,...a), mx=Math.max(hi,...a);
+  const pts=a.map((v,i)=>[(i/(90-1))*100 + (90-n)/(90-1)*100, 24-((v-mn)/(mx-mn||1))*22]);
+  const s=pts.map(p=>p[0].toFixed(1)+","+p[1].toFixed(1)).join(" ");
+  $("p_"+k).setAttribute("points",s);
+  $("a_"+k).setAttribute("d",`M${pts[0][0].toFixed(1)} 26 L${s.replace(/ /g," L")} L${pts[n-1][0].toFixed(1)} 26Z`);
+}
+
+function sample(){
+  // called once per complete data cycle
+  const now = performance.now();
+  const lph = fuelLph();
+  if(trip.last){
+    const dt = Math.min((now-trip.last)/1000, 5);
+    if(S.rpm>0){ trip.time+=dt; trip.dist+=S.speed*dt/3600; if(lph!=null) trip.fuel+=lph*dt/3600; }
+  }
+  trip.last = now;
+  S.lph = lph;
+  S.inst = (lph==null) ? null : (S.speed<3 ? lph : (lph<0.05 ? 99.9 : Math.min(S.speed/lph,99.9)));
+  S.avg = trip.fuel>0.01 ? trip.dist/trip.fuel : null;
+  ["coolant","volt","iat","load"].forEach(k=>pushHist(k,S[k]));
+  if(S.speed>=3) pushHist("inst",Math.min(S.inst??0,40));
+  pushHist("avg",S.avg);
+  render();
+}
+
+function render(){
+  // tiles
+  const alerts=[];
+  TILES.forEach(t=>{
+    const v=S[t.k], el=$("t_"+t.k);
+    if(v==null){ $("v_"+t.k).textContent="--"; $("s_"+t.k).textContent=mode==="off"?"—":"無資料"; el.dataset.l=""; return; }
+    $("v_"+t.k).textContent=t.fmt(v);
+    if(t.k==="inst") $("u_inst").textContent = S.speed<3 ? "L/h" : "km/L";
+    const [l,txt]=level(t.k,v); el.dataset.l=l; $("s_"+t.k).textContent=txt;
+    if(l==="warn"||l==="crit") alerts.push([l,`${t.label} ${txt}（${t.fmt(v)} ${t.unit}）`]);
+    spark(t.k,t.lo,t.hi);
+  });
+  if(S.rpm>=REDLINE) alerts.unshift(["crit","轉速接近紅線"]);
+  if(S.mil) alerts.unshift(["crit",`引擎故障燈亮${S.dtcCount?`（${S.dtcCount} 筆故障碼）`:""}`]);
+  // bars
+  $("tpsV").textContent = S.tps==null?"--":S.tps.toFixed(0); $("tpsB").style.width=(S.tps??0)+"%";
+  $("mapV").textContent = S.map==null?"--":S.map.toFixed(0); $("mapB").style.width=Math.min((S.map??0)/105*100,100)+"%";
+  $("spd").textContent = Math.round(S.speed);
+  // trip
+  $("tDist").textContent=trip.dist.toFixed(1);
+  $("tFuel").textContent=trip.fuel.toFixed(2);
+  const m=Math.floor(trip.time/60); $("tTime").textContent=`${Math.floor(m/60)}:${String(m%60).padStart(2,"0")}`;
+  $("tAvg").textContent = trip.time>10 ? Math.round(trip.dist/(trip.time/3600)) : 0;
+  // mil
+  const milEl=$("mil");
+  if(S.mil==null){ milEl.textContent="引擎燈：—"; milEl.className="mil"; }
+  else { milEl.textContent = S.mil?"引擎燈：亮":"引擎燈：熄"; milEl.className = S.mil?"mil on":"mil"; }
+  // alert strip
+  const box=$("alerts");
+  if(mode==="off") box.innerHTML=`<span class="chip info">插上 BLE OBD 接頭並發動引擎，再按「連接 OBD」；或先用示範模式查看畫面</span>`;
+  else if(!alerts.length) box.innerHTML=`<span class="chip ok">車況正常</span>`;
+  else box.innerHTML=alerts.map(([l,t])=>`<span class="chip ${l}">${t}</span>`).join("");
+}
+
+// smooth tach animation
+function frame(){
+  disp.rpm += (S.rpm-disp.rpm)*0.25;
+  const a=rpmA(disp.rpm);
+  const av=$("arcVal"); av.setAttribute("d",arc(A0,a));
+  av.setAttribute("stroke", disp.rpm>=REDLINE?C.crit:(disp.rpm>=5500?C.warn:C.accent));
+  $("rpmTxt").textContent = Math.round(disp.rpm/10)*10;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+/* ---------- status ---------- */
+function setMode(m,txt){
+  mode=m; $("pill").dataset.s = m==="off"&&txt ? "err" : m;
+  $("pillTxt").textContent = txt || ({off:"未連線",busy:"連線中…",on:"已連線",demo:"示範模式"}[m]);
+  $("btnConn").textContent = m==="on"||m==="busy" ? "中斷連線" : "連接 OBD";
+  $("btnDemo").textContent = m==="demo" ? "停止示範" : "示範模式";
+  $("btnDtc").disabled = $("btnClr").disabled = !(m==="on"||m==="demo");
+  render();
+}
+function resetState(){ Object.keys(S).forEach(k=>S[k]=null); S.rpm=0; S.speed=0; Object.values(HIST).forEach(a=>a.length=0); trip.last=0; }
+
+/* ---------- ELM327 over BLE ---------- */
+const SERVICES = [
+  0xfff0, 0xffe0, 0x18f0, 0xffb0, 0xfee0,
+  "e7810a71-73ae-499d-8c15-faa9aef0c3f2", // Vgate iCar Pro BLE
+  "0000fff0-0000-1000-8000-00805f9b34fb",
+];
+class Elm {
+  constructor(){ this.buf=""; this.waiter=null; this.chain=Promise.resolve(); this.dec=new TextDecoder(); this.enc=new TextEncoder(); }
+  async open(){
+    this.dev = await navigator.bluetooth.requestDevice({acceptAllDevices:true, optionalServices:SERVICES});
+    log("裝置："+(this.dev.name||this.dev.id));
+    this.dev.addEventListener("gattserverdisconnected",()=>{ log("藍牙已斷線"); if(mode==="on"||mode==="busy") stopAll("連線中斷"); });
+    const server = await this.dev.gatt.connect();
+    const svcs = await server.getPrimaryServices();
+    for(const s of svcs){
+      let tx=null, rx=null;
+      try{
+        for(const c of await s.getCharacteristics()){
+          if(!tx && (c.properties.write||c.properties.writeWithoutResponse)) tx=c;
+          if(!rx && (c.properties.notify||c.properties.indicate)) rx=c;
+        }
+      }catch(e){ continue; }
+      if(tx&&rx){ this.tx=tx; this.rx=rx; log("服務 "+s.uuid); break; }
+    }
+    if(!this.tx) throw new Error("找不到 ELM327 的通訊通道，接頭可能不是 BLE 版");
+    await this.rx.startNotifications();
+    this.rx.addEventListener("characteristicvaluechanged",e=>{
+      this.buf += this.dec.decode(e.target.value);
+      const i=this.buf.indexOf(">");
+      if(i>=0 && this.waiter){ const out=this.buf.slice(0,i); this.buf=this.buf.slice(i+1); const w=this.waiter; this.waiter=null; w(out); }
+    });
+  }
+  send(cmd, timeout=2500){
+    const run = () => new Promise(async (res)=>{
+      this.buf="";
+      const t=setTimeout(()=>{ this.waiter=null; res(null); }, timeout);
+      this.waiter = s => { clearTimeout(t); res(s); };
+      const data=this.enc.encode(cmd+"\r");
+      try{
+        if(this.tx.properties.writeWithoutResponse && this.tx.writeValueWithoutResponse) await this.tx.writeValueWithoutResponse(data);
+        else await this.tx.writeValue(data);
+      }catch(e){ clearTimeout(t); this.waiter=null; res(null); }
+    });
+    const p = this.chain.then(run);
+    this.chain = p.catch(()=>{});
+    return p.then(r => r==null ? null : r.replace(/\r/g,"\n").split("\n").map(x=>x.trim()).filter(x=>x && !/^SEARCHING/i.test(x)).join("\n"));
+  }
+  close(){ try{ this.dev?.gatt?.disconnect(); }catch(e){} }
+}
+const hex = s => (s||"").replace(/[^0-9A-Fa-f\n]/g,"").toUpperCase();
+function bytesFor(resp, pid){ // mode 01 response bytes after "41PID"
+  if(!resp || /NO DATA|ERROR|UNABLE|STOPPED|\?/i.test(resp)) return null;
+  const h=hex(resp).replace(/\n/g,""); const i=h.indexOf("41"+pid); if(i<0) return null;
+  const out=[]; for(let j=i+4;j+1<h.length && out.length<4;j+=2) out.push(parseInt(h.substr(j,2),16));
+  return out;
+}
+const PIDS = {
+  "0C": b=>{ S.rpm=((b[0]*256)+b[1])/4; },
+  "0D": b=>{ S.speed=b[0]; },
+  "04": b=>{ S.load=b[0]*100/255; },
+  "0B": b=>{ S.map=b[0]; },
+  "11": b=>{ S.tps=b[0]*100/255; },
+  "10": b=>{ S.maf=((b[0]*256)+b[1])/100; },
+  "05": b=>{ S.coolant=b[0]-40; },
+  "0F": b=>{ S.iat=b[0]-40; },
+  "01": b=>{ S.mil=!!(b[0]&0x80); S.dtcCount=b[0]&0x7f; },
+};
+async function readPid(pid){ const r=await elm.send("01"+pid); const b=bytesFor(r,pid); if(b) PIDS[pid](b); return !!b; }
+
+async function connect(){
+  if(!navigator.bluetooth){ setMode("off","瀏覽器不支援藍牙"); log("navigator.bluetooth 不存在：請用 Android Chrome / Edge，或 iOS 的 Bluefy"); return; }
+  stopDemo(); resetState(); setMode("busy");
+  elm = new Elm();
+  try{
+    await elm.open();
+    for(const c of ["ATZ","ATE0","ATL0","ATS0","ATH0","ATAT1","ATSP0"]){ const r=await elm.send(c, c==="ATZ"?4000:2000); log(c+" → "+(r??"逾時")); }
+    const sup = await elm.send("0100", 8000); log("0100 → "+(sup??"逾時"));
+    const b = bytesFor(sup,"00");
+    if(!b) throw new Error("ECU 無回應，請確認引擎已發動（或鑰匙轉到 ON）");
+    const bits = (b[0]<<24|b[1]<<16|b[2]<<8|b[3])>>>0;
+    hasMAF = !!(bits & (1<<(32-0x10)));
+    log("協定："+((await elm.send("ATDP"))||"?")+"　MAF："+(hasMAF?"有":"無，改用 MAP 推算"));
+    setMode("on"); requestWake(); pollLoop();
+  }catch(e){
+    log("失敗："+e.message);
+    elm?.close(); elm=null;
+    const msg = e.name==="NotFoundError" ? "已取消選擇" : (e.name==="SecurityError"||/permission|policy/i.test(e.message)) ? "此頁面環境封鎖藍牙" : "連線失敗";
+    setMode("off",msg);
+    if(msg==="此頁面環境封鎖藍牙") log("請改用獨立 HTML 檔，以 HTTPS 網址在 Chrome 開啟");
+  }
+}
+async function pollLoop(){
+  const FAST=["0C","0D","04","11", hasMAF?"10":"0B"], SLOW=["05","0F","01", hasMAF?"0B":null].filter(Boolean);
+  let i=0, fails=0;
+  while(mode==="on" && elm){
+    let ok=0;
+    for(const p of FAST){ if(mode!=="on") return; ok+= await readPid(p) ? 1 : 0; }
+    if(i%5===0){
+      for(const p of SLOW) await readPid(p);
+      const v=await elm.send("ATRV"); const m=v&&v.match(/(\d+(\.\d+)?)\s*V/i); if(m) S.volt=parseFloat(m[1]);
+    }
+    fails = ok ? 0 : fails+1;
+    if(fails>=8){ stopAll("ECU 無回應"); return; }
+    sample(); i++;
+  }
+}
+function stopAll(txt){ elm?.close(); elm=null; releaseWake(); setMode("off",txt); }
+
+/* ---------- DTC ---------- */
+const DTC_TXT = {
+  P0420:"觸媒轉換器效率低於門檻", P0171:"混合比過稀", P0172:"混合比過濃",
+  P0300:"多缸失火", P0301:"第 1 缸失火", P0302:"第 2 缸失火", P0303:"第 3 缸失火", P0304:"第 4 缸失火",
+  P0128:"水溫上升過慢（節溫器）", P0505:"怠速控制系統異常", P0507:"怠速轉速過高",
+  P0455:"蒸發系統大量洩漏（油箱蓋）", P0456:"蒸發系統微量洩漏", P0457:"油箱蓋未鎖緊",
+  P0135:"前含氧感知器加熱器", P0141:"後含氧感知器加熱器", P0113:"進氣溫度感知器電壓過高",
+  P0118:"水溫感知器電壓過高", P0562:"系統電壓過低", P0563:"系統電壓過高", P0335:"曲軸位置感知器", P0340:"凸輪軸位置感知器",
+  P0841:"CVT 油壓開關異常", P0868:"CVT 油壓過低", P2646:"VTC/VTEC 油壓開關",
+};
+function decodeDtc(resp){
+  if(!resp || /NO DATA/i.test(resp)) return [];
+  const lines=resp.split("\n").map(l=>hex(l.replace(/^\s*[0-9A-F]:/i,""))).filter(l=>l.length>3);
+  const h=lines.join(""); const i=h.indexOf("43"); if(i<0) return [];
+  let body=h.slice(i+2);
+  const n=parseInt(body.slice(0,2),16);
+  if(!isNaN(n) && n<=20 && body.length>=2+n*4) body=body.slice(2,2+n*4); // CAN count byte
+  const out=[];
+  for(let j=0;j+3<body.length;j+=4){
+    const w=body.substr(j,4); if(w==="0000") continue;
+    const d=parseInt(w[0],16);
+    out.push("PCBU"[d>>2] + (d&3) + w.slice(1));
+  }
+  return [...new Set(out)];
+}
+function showDtc(list,demo){
+  const el=$("dtcList");
+  if(!list.length){ el.innerHTML=`<span class="muted">沒有故障碼。</span>`; return; }
+  el.innerHTML=list.map(c=>`<div class="dtc"><code>${c}</code><span>${DTC_TXT[c]||"請查詢原廠維修手冊"}</span></div>`).join("") + (demo?`<span class="muted">示範資料</span>`:"");
+}
+$("btnDtc").onclick = async ()=>{
+  if(mode==="demo"){ showDtc(["P0457"],true); return; }
+  $("dtcList").innerHTML=`<span class="muted">讀取中…</span>`;
+  const r=await elm.send("03",5000); log("03 → "+(r??"逾時"));
+  const r7=await elm.send("07",5000); log("07 → "+(r7??"逾時"));
+  const pend=decodeDtc((r7||"").replace(/47/,"43"));
+  const list=decodeDtc(r);
+  showDtc([...list, ...pend.filter(c=>!list.includes(c)).map(c=>c)]);
+};
+$("btnClr").onclick = ()=>{ $("clrConfirm").hidden=false; };
+$("clrNo").onclick = ()=>{ $("clrConfirm").hidden=true; };
+$("clrYes").onclick = async ()=>{
+  $("clrConfirm").hidden=true;
+  if(mode==="demo"){ S.mil=false; S.dtcCount=0; showDtc([]); render(); return; }
+  const r=await elm.send("04",5000); log("04 → "+(r??"逾時"));
+  $("dtcList").innerHTML = /44/.test(hex(r)) ? `<span class="muted">已清除。若問題仍在，故障碼會再次出現。</span>` : `<span class="muted">清除失敗，請在引擎熄火、鑰匙 ON 的狀態再試一次。</span>`;
+  await readPid("01"); render();
+};
+
+/* ---------- demo ---------- */
+function startDemo(){
+  if(elm) stopAll(); resetState(); hasMAF=false;
+  Object.assign(S,{coolant:46,iat:31,volt:14.2,mil:false,dtcCount:0,load:20,tps:12,map:32});
+  let target=0, t=0;
+  setMode("demo");
+  demoTimer=setInterval(()=>{
+    t+=0.2;
+    if(Math.random()<0.012) target = [0,30,45,60,80,100][Math.floor(Math.random()*6)];
+    const accel = target - S.speed;
+    S.speed = Math.max(0, S.speed + Math.sign(accel)*Math.min(Math.abs(accel), accel>0?0.9:1.6));
+    const accelerating = accel>2;
+    // CVT: rpm loosely tied to speed and demand
+    const base = S.speed<2 ? 750 : 1100 + S.speed*14;
+    const rt = accelerating ? base + 1500 + Math.random()*900 : base;
+    S.rpm += (rt - S.rpm)*0.15 + (Math.random()-.5)*30;
+    S.tps = accelerating ? 30+Math.random()*25 : (accel<-2 ? 10 : 14 + S.speed*0.08);
+    S.load = accel<-2 && S.speed>15 ? 5 : (accelerating ? 55+Math.random()*25 : 18 + S.speed*0.2);
+    S.map = 25 + S.load*0.75;
+    S.coolant = Math.min(S.coolant + (S.coolant<89?0.06:0) + (Math.random()-.5)*0.05, 92);
+    S.iat = 30 + (S.speed<5?6:0) + Math.sin(t/20);
+    S.volt = 14.1 + (Math.random()-.5)*0.15;
+    sample();
+  },200);
+}
+function stopDemo(){ if(demoTimer){ clearInterval(demoTimer); demoTimer=null; } }
+
+/* ---------- misc ---------- */
+async function requestWake(){ try{ wakeLock = await navigator.wakeLock?.request("screen"); }catch(e){} }
+function releaseWake(){ try{ wakeLock?.release(); }catch(e){} wakeLock=null; }
+document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="visible" && (mode==="on"||mode==="demo")) requestWake(); });
+
+$("btnConn").onclick = ()=>{ if(mode==="on"||mode==="busy") stopAll(); else connect(); };
+$("btnDemo").onclick = ()=>{ if(mode==="demo"){ stopDemo(); releaseWake(); resetState(); setMode("off"); } else { startDemo(); requestWake(); } };
+$("btnReset").onclick = ()=>{ trip.dist=trip.fuel=trip.time=0; trip.last=0; HIST.avg.length=0; render(); };
+$("btnFs").onclick = async ()=>{ try{ document.fullscreenElement ? await document.exitFullscreen() : await document.documentElement.requestFullscreen(); }catch(e){} };
+
+// Open in a working state so the layout is visible right away
+startDemo();
+})();
+</script>
+</body></html>

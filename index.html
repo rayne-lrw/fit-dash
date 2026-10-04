@@ -82,12 +82,18 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
 /* dash */
 .dial{display:flex;flex-direction:column;gap:10px}
-.dial svg{width:100%;height:auto;max-height:min(400px,calc(100vh - 230px));display:block;margin-inline:auto}
+.dial svg{width:100%;height:auto;max-height:min(380px,calc(100vh - 275px));display:block;margin-inline:auto}
 .bars{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 .hbar .top{display:flex;justify-content:space-between;align-items:baseline}
 .hbar .top .num{font-size:22px;font-weight:600}
 .track{height:8px;border-radius:4px;background:var(--panel2);overflow:hidden;margin-top:4px}
 .track b{display:block;height:100%;width:0;background:var(--accent);transition:width .2s}
+.corr{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-top:8px;border-top:1px solid var(--line)}
+.corr .lbl{margin-right:4px}
+.corr .btn.sm{width:34px;padding-inline:0;font-size:18px;line-height:1.2}
+.corr-v{min-width:66px;padding:3px 8px;border-radius:6px;border:1px solid var(--line);background:transparent;font-size:20px;font-weight:600;color:var(--dim)}
+.corr-v[data-on="1"]{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 50%,var(--line))}
+.corr .muted{margin-left:auto}
 .tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-content:start}
 .tile{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px 8px;display:flex;flex-direction:column;gap:2px;min-width:0;transition:background .3s,border-color .3s}
 .tile .head,.ct .head{display:flex;justify-content:space-between;align-items:center;gap:6px}
@@ -212,6 +218,13 @@ details summary{cursor:pointer;color:var(--dim);font-size:13px}
       <div class="hbar"><div class="top"><span class="lbl">節氣門開度</span><span><span class="num" id="tpsV">--</span> <small class="muted">%</small></span></div><div class="track"><b id="tpsB"></b></div></div>
       <div class="hbar"><div class="top"><span class="lbl">進氣歧管壓力</span><span><span class="num" id="mapV">--</span> <small class="muted">kPa</small></span></div><div class="track"><b id="mapB"></b></div></div>
     </div>
+    <div class="corr">
+      <span class="lbl">車速補正</span>
+      <button class="btn sm" id="corrDn" aria-label="補正減 0.5%">−</button>
+      <button class="corr-v num" id="corrV" title="點一下歸零">0.0%</button>
+      <button class="btn sm" id="corrUp" aria-label="補正加 0.5%">+</button>
+      <span class="muted" id="corrRaw">未補正</span>
+    </div>
   </section>
   <section class="tiles" id="tiles"></section>
 </main>
@@ -304,6 +317,7 @@ details summary{cursor:pointer;color:var(--dim);font-size:13px}
     <li>不用先到系統設定配對。發動引擎後按「連接 OBD」，在清單選接頭（可能只顯示一串位址）。</li>
     <li>連線時面板會先查詢這台車支援哪些項目，不支援的會自動隱藏、不會讀取。</li>
     <li>油耗：ECU 有提供燃油流量就直接用；沒有則用空氣流量或進氣壓力推算，誤差約 ±10%。</li>
+    <li>車速補正：以 GPS 測速 App 對照，定速 60 km/h 時算 (GPS ÷ 面板原始值 − 1) × 100%，再用 ＋／− 調整（每格 0.5%，點數字歸零）。補正會套用到車速、里程、平均車速、油耗和加速計時，設定會記在這台裝置上。</li>
     <li>開車時不要操作面板。讀碼、清碼請在停車時進行。</li>
   </ul>
   <div class="log" id="log"></div>
@@ -332,7 +346,7 @@ const P = {
   "0A":{n:1,k:"fuelp",name:"燃油壓力",f:b=>b[0]*3},
   "0B":{n:1,k:"map",name:"進氣歧管壓力",f:b=>b[0]},
   "0C":{n:2,k:"rpm",name:"引擎轉速",f:b=>w(b)/4},
-  "0D":{n:1,k:"speed",name:"車速",f:b=>b[0]},
+  "0D":{n:1,k:"speedRaw",name:"車速",f:b=>b[0]},
   "0E":{n:1,k:"timing",name:"點火提前角",f:b=>b[0]/2-64},
   "0F":{n:1,k:"iat",name:"進氣溫度",f:b=>b[0]-40},
   "10":{n:2,k:"maf",name:"空氣流量",f:b=>w(b)/100},
@@ -368,7 +382,7 @@ const P = {
 const S = {};
 function resetState(){
   for(const k of Object.keys(S)) delete S[k];
-  S.rpm=0; S.speed=0;
+  S.rpm=0; S.speed=0; S.speedRaw=0;
   Object.values(HIST).forEach(a=>a.length=0);
   idleBuf.length=0; trip.last=0;
 }
@@ -490,6 +504,19 @@ const INFO = [
 ];
 $("infoRows").innerHTML = INFO.map((r,i)=>`<div class="row" id="inf${i}"><span>${r.label}</span><b id="inf${i}v">--</b></div>`).join("");
 
+/* ---------- speed correction ---------- */
+let spdCorr=0;
+try{ const v=parseFloat(localStorage.getItem("fitdash.spdCorr")); if(isFinite(v)) spdCorr=Math.max(-15,Math.min(15,v)); }catch(e){}
+function setCorr(v){
+  spdCorr=Math.round(Math.max(-15,Math.min(15,v))*2)/2;
+  try{ localStorage.setItem("fitdash.spdCorr",String(spdCorr)); }catch(e){}
+  S.speed=(S.speedRaw||0)*(1+spdCorr/100);
+  render();
+}
+$("corrDn").onclick=()=>setCorr(spdCorr-0.5);
+$("corrUp").onclick=()=>setCorr(spdCorr+0.5);
+$("corrV").onclick=()=>setCorr(0);
+
 /* ---------- tabs ---------- */
 function setTab(p){
   tab=p;
@@ -559,6 +586,7 @@ function accUpdate(now){
 /* ---------- per-cycle sample ---------- */
 function sample(){
   const now=performance.now();
+  S.speed = (S.speedRaw||0) * (1 + spdCorr/100);
   const lph=fuelLph();
   if(trip.last){
     const dt=Math.min((now-trip.last)/1000,5);
@@ -615,6 +643,9 @@ function render(){
   $("tpsV").textContent=S.tps==null?"--":S.tps.toFixed(0); $("tpsB").style.width=(S.tps??0)+"%";
   $("mapV").textContent=S.map==null?"--":S.map.toFixed(0); $("mapB").style.width=Math.min((S.map??0)/105*100,100)+"%";
   $("spd").textContent=Math.round(S.speed||0);
+  $("corrV").textContent=(spdCorr>0?"+":"")+spdCorr.toFixed(1)+"%";
+  $("corrV").dataset.on = spdCorr!==0 ? "1" : "";
+  $("corrRaw").textContent = spdCorr===0 ? "未補正" : `原始 ${Math.round(S.speedRaw||0)} → 顯示 ${Math.round(S.speed||0)} km/h`;
 
   // trip
   $("tDist").textContent=trip.dist.toFixed(1);
@@ -907,24 +938,24 @@ function startDemo(){
   setMode("demo");
   demoTimer=setInterval(()=>{
     t+=0.2;
-    if(S.speed===0 && target===0 && Math.random()<0.02) target=100;
+    if(S.speedRaw===0 && target===0 && Math.random()<0.02) target=100;
     else if(Math.random()<0.01) target=[0,30,45,60,80][Math.floor(Math.random()*5)];
-    const d=target-S.speed, up=d>2;
-    S.speed=Math.max(0,S.speed+Math.sign(d)*Math.min(Math.abs(d),up?(target===100?1.9:0.9):1.6));
-    if(S.speed>=100) target=60;
-    const base=S.speed<2?760:1100+S.speed*14, rt=up?base+1700+Math.random()*900:base;
-    S.rpm+=(rt-S.rpm)*0.15+(Math.random()-.5)*(S.speed<2?24:30);
-    S.tps=up?30+Math.random()*25:(d<-2?10:14+S.speed*0.08);
-    S.relTps=Math.max(0,S.tps-11); S.pedal=up?S.tps+5:(d<-2?0:8+S.speed*0.1); S.cmdTps=S.tps;
-    S.load=d<-2&&S.speed>15?5:(up?55+Math.random()*25:18+S.speed*0.2); S.absLoad=S.load*0.9;
+    const d=target-S.speedRaw, up=d>2;
+    S.speedRaw=Math.max(0,S.speedRaw+Math.sign(d)*Math.min(Math.abs(d),up?(target===100?1.9:0.9):1.6));
+    if(S.speedRaw>=100) target=60;
+    const base=S.speedRaw<2?760:1100+S.speedRaw*14, rt=up?base+1700+Math.random()*900:base;
+    S.rpm+=(rt-S.rpm)*0.15+(Math.random()-.5)*(S.speedRaw<2?24:30);
+    S.tps=up?30+Math.random()*25:(d<-2?10:14+S.speedRaw*0.08);
+    S.relTps=Math.max(0,S.tps-11); S.pedal=up?S.tps+5:(d<-2?0:8+S.speedRaw*0.1); S.cmdTps=S.tps;
+    S.load=d<-2&&S.speedRaw>15?5:(up?55+Math.random()*25:18+S.speedRaw*0.2); S.absLoad=S.load*0.9;
     S.map=25+S.load*0.75;
     S.coolant=Math.min(S.coolant+(S.coolant<89?0.06:0)+(Math.random()-.5)*0.05,92);
-    S.iat=30+(S.speed<5?6:0)+Math.sin(t/20);
+    S.iat=30+(S.speedRaw<5?6:0)+Math.sin(t/20);
     S.volt=14.1+(Math.random()-.5)*0.15; S.ecuV=S.volt-0.1;
     S.stft=(Math.random()-.5)*6; S.ltft=2.3;
     S.cmdLambda=up&&S.load>70?0.88:1.0; S.o2wrC=S.cmdLambda+(Math.random()-.5)*0.03;
     S.o2s2v=0.62+(Math.random()-.5)*0.06;
-    S.timing=S.speed<2?8+Math.random()*3:(up?14+Math.random()*6:28+Math.random()*6);
+    S.timing=S.speedRaw<2?8+Math.random()*3:(up?14+Math.random()*6:28+Math.random()*6);
     S.cat=Math.min(S.cat+(S.cat<620?1.5:0)+(Math.random()-.5)*2,700);
     S.runtime+=0.2; S.fuelLvl=Math.max(5,S.fuelLvl-0.0004);
     sample();

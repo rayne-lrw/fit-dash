@@ -10,7 +10,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>Fit 戰情面板</title>
+<title>車況面板</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@400;600;700&family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
@@ -38,9 +38,10 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
 /* top bar */
 .bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-bottom:10px}
-.brand{display:flex;align-items:baseline;gap:8px}
-.brand b{font-family:var(--f-num);font-size:22px;font-weight:700;letter-spacing:.08em}
-.brand span{color:var(--dim);font-size:11px;letter-spacing:.08em}
+.carsel{padding:6px 30px 6px 11px;border-radius:8px;border:1px solid var(--line);background:var(--panel2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%237d91a3'/%3E%3C/svg%3E") no-repeat right 11px center;color:var(--fg);font:inherit;font-size:15px;font-weight:500;appearance:none;-webkit-appearance:none;cursor:pointer;max-width:100%}
+.carsel:hover{border-color:var(--accent)}
+.carsel:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.carsel:disabled{opacity:.6;cursor:not-allowed}
 .tabs{display:flex;gap:2px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:3px;margin-right:auto}
 .tab{padding:6px 16px;border-radius:7px;border:0;background:transparent;color:var(--dim);font-size:15px;font-weight:500}
 .tab:hover{color:var(--fg)}
@@ -186,7 +187,7 @@ details summary{cursor:pointer;color:var(--dim);font-size:13px}
 <body>
 
 <header class="bar">
-  <div class="brand"><b>FIT GK5</b><span>L15B · CVT</span></div>
+  <select class="carsel" id="car" aria-label="車款" title="連線中無法切換"></select>
   <nav class="tabs" role="tablist" aria-label="頁面">
     <button class="tab" role="tab" id="tab-dash" data-p="dash">儀表</button>
     <button class="tab" role="tab" id="tab-eng" data-p="eng">引擎</button>
@@ -316,7 +317,8 @@ details summary{cursor:pointer;color:var(--dim);font-size:13px}
     <li>需要 <b>BLE（藍牙 4.0 以上低功耗）</b> 版 ELM327 接頭，例如 Vgate iCar Pro 2S、vLinker MC+、Veepeak BLE+。傳統藍牙與 WiFi 版瀏覽器無法連線。</li>
     <li>不用先到系統設定配對。發動引擎後按「連接 OBD」，在清單選接頭（可能只顯示一串位址）。</li>
     <li>連線時面板會先查詢這台車支援哪些項目，不支援的會自動隱藏、不會讀取。</li>
-    <li>油耗：ECU 有提供燃油流量就直接用；沒有則用空氣流量或進氣壓力推算，誤差約 ±10%。</li>
+    <li>油耗：ECU 有提供燃油流量就直接用；沒有的話，汽油車用空氣流量或進氣壓力推算（誤差約 ±10%），柴油車用引擎負載估算（誤差較大，油耗磚會標「估算」）。</li>
+    <li>左上角選單切換車款，會記住上次選的車。切換時本趟行程、加速紀錄和車速補正都會歸零；連線中不能切換。</li>
     <li>車速補正：以 GPS 測速 App 對照，定速 60 km/h 時算 (GPS ÷ 面板原始值 − 1) × 100%，再用 ＋／− 調整（每格 0.5%，點數字歸零）。補正會套用到車速、里程、平均車速、油耗和加速計時，設定會記在這台裝置上。</li>
     <li>開車時不要操作面板。讀碼、清碼請在停車時進行。</li>
   </ul>
@@ -331,9 +333,22 @@ const C = {fg:"#e7eef4",dim:"#7d91a3",accent:"#5ec4ff",ok:"#38d996",warn:"#ffb02
 const hex2 = n => n.toString(16).toUpperCase().padStart(2,"0");
 const hex = s => (s||"").replace(/[^0-9A-Fa-f]/g,"").toUpperCase();
 
-/* ---------- vehicle constants (GK5 L15B) ---------- */
-const DISP = 1.496, VE = 0.85, AFR = 14.7, FUEL_D = 745, TANK_L = 40;
-const REDLINE = 6800, RPM_MAX = 8000;
+/* ---------- vehicle profiles ---------- */
+// diesel: fuel can't be derived from airflow (lean, variable A/F), so without PID 5E it is estimated from load:
+// mg/stroke ≈ mgIdle + load% × (mgMax − mgIdle). Load on diesels is torque / max torque at current rpm.
+const CARS = {
+  fit:{name:"Honda Fit GK5 · L15B CVT",diesel:false,disp:1.496,ve:0.85,afr:14.7,fuelD:745,tank:40,cyl:4,
+    redline:6800,rpmMax:8000,rpmWarn:5500,mapMax:105,idle:760,demoDtc:"P0457",
+    dtc:{P0841:"CVT 油壓開關異常",P0868:"CVT 油壓過低",P2646:"VTC/VTEC 油壓開關"}},
+  santafe:{name:"Hyundai Santa Fe 2015 · 2.2 柴油 6AT 4WD",diesel:true,disp:2.199,ve:0.9,afr:14.5,fuelD:835,tank:64,cyl:4,
+    mgIdle:2,mgMax:60,redline:4500,rpmMax:6000,rpmWarn:3800,mapMax:260,idle:750,demoDtc:"P0401",
+    dtc:{P0087:"共軌壓力過低",P0088:"共軌壓力過高",P0093:"燃油系統大量洩漏",P0299:"渦輪增壓不足",P0234:"渦輪增壓過高",
+      P0045:"渦輪增壓控制電磁閥電路",P0101:"空氣流量計訊號超出範圍",P0401:"EGR 流量不足",P0402:"EGR 流量過多",
+      P2002:"DPF 效率低於門檻",P242F:"DPF 積碳過多",P2452:"DPF 壓差感知器電路",P2453:"DPF 壓差感知器訊號異常",
+      P0380:"預熱塞電路",P0670:"預熱塞控制模組電路",P0700:"變速箱控制系統（請讀 TCM）",P0741:"變扭器鎖定離合器卡在分離"}},
+};
+let carId="fit"; try{ const c=localStorage.getItem("fitdash.car"); if(CARS[c]) carId=c; }catch(e){}
+let CAR=CARS[carId], REDLINE=CAR.redline, RPM_MAX=CAR.rpmMax;
 
 /* ---------- OBD-II mode 01 PIDs (SAE J1979) ---------- */
 const w = b => b[0]*256 + b[1];
@@ -356,7 +371,7 @@ const P = {
   "1C":{n:1,k:"obdstd",name:"OBD 標準",f:b=>b[0]},
   "1F":{n:2,k:"runtime",name:"本次發動時間",f:w},
   "21":{n:2,k:"milDist",name:"故障燈亮時行駛",f:w},
-  "23":{n:2,k:"rail",name:"油軌壓力",f:b=>w(b)*10},
+  "23":{n:2,k:"rail",name:"共軌壓力",f:b=>w(b)*10},
   "24":{n:2,k:"o2wrV",name:"前含氧 λ（電壓型）",f:b=>2*w(b)/65536},
   "2F":{n:1,k:"fuelLvl",name:"油箱油量",f:b=>b[0]*100/255},
   "30":{n:1,k:"warmups",name:"清碼後暖車次數",f:b=>b[0]},
@@ -407,8 +422,8 @@ const pt=(a,r=R)=>{ const t=a*Math.PI/180; return [CX+r*Math.sin(t), CY-r*Math.c
 const rpmA=v=>A0+(A1-A0)*Math.min(Math.max(v,0),RPM_MAX)/RPM_MAX;
 function arc(a0,a1,r=R){ if(a1-a0<0.2) a1=a0+0.2; const [x0,y0]=pt(a0,r),[x1,y1]=pt(a1,r); return `M${x0.toFixed(2)} ${y0.toFixed(2)} A${r} ${r} 0 ${a1-a0>180?1:0} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`; }
 $("arcBg").setAttribute("d",arc(A0,A1));
-$("arcRed").setAttribute("d",arc(rpmA(REDLINE),A1));
-(function(){
+function drawTach(){
+  $("arcRed").setAttribute("d",arc(rpmA(REDLINE),A1));
   let h="";
   for(let k=0;k<=RPM_MAX;k+=500){
     const a=rpmA(k), major=k%1000===0, [x0,y0]=pt(a,R-12), [x1,y1]=pt(a,R-(major?24:18));
@@ -419,7 +434,8 @@ $("arcRed").setAttribute("d",arc(rpmA(REDLINE),A1));
   const [lx,ly]=pt(0,R-56);
   h+=`<text x="${lx}" y="${ly}" text-anchor="middle" fill="${C.dim}" font-size="9" letter-spacing="1.5">×1000 r/min</text>`;
   $("ticks").innerHTML=h;
-})();
+}
+drawTach();
 
 /* ---------- dash tiles ---------- */
 const TILES = [
@@ -445,17 +461,18 @@ const sgn = (v,d=1) => (v>0?"+":"")+v.toFixed(d);
 const ENG = [
   {g:"fuel",pid:"06",k:"stft",label:"短期燃油修正",unit:"%",fmt:v=>sgn(v),sub:"即時微調，正值代表加油",lvl:v=>Math.abs(v)>25?["crit","異常"]:Math.abs(v)>15?["warn","偏大"]:["ok","正常"]},
   {g:"fuel",pid:"07",k:"ltft",label:"長期燃油修正",unit:"%",fmt:v=>sgn(v),sub:"超過 ±10% 建議檢查",lvl:v=>Math.abs(v)>20?["crit","異常"]:Math.abs(v)>10?["warn","偏大"]:["ok","正常"]},
-  {g:"fuel",pid:"44",k:"cmdLambda",label:"目標空燃比",unit:"A/F",fmt:v=>(v*AFR).toFixed(1),sub:v=>"λ "+v.toFixed(3)},
-  {g:"fuel",pid:"34",k:"o2wrC",label:"前含氧 A/F",unit:"A/F",fmt:v=>(v*AFR).toFixed(1),sub:v=>"λ "+v.toFixed(3)},
-  {g:"fuel",pid:"24",k:"o2wrV",label:"前含氧 A/F",unit:"A/F",fmt:v=>(v*AFR).toFixed(1),sub:v=>"λ "+v.toFixed(3)},
+  {g:"fuel",pid:"44",k:"cmdLambda",label:"目標空燃比",unit:"A/F",fmt:v=>(v*CAR.afr).toFixed(1),sub:v=>"λ "+v.toFixed(3)},
+  {g:"fuel",pid:"34",k:"o2wrC",label:"前含氧 A/F",unit:"A/F",fmt:v=>(v*CAR.afr).toFixed(1),sub:v=>"λ "+v.toFixed(3)},
+  {g:"fuel",pid:"24",k:"o2wrV",label:"前含氧 A/F",unit:"A/F",fmt:v=>(v*CAR.afr).toFixed(1),sub:v=>"λ "+v.toFixed(3)},
   {g:"fuel",pid:"14",k:"o2s1v",label:"前含氧電壓",unit:"V",fmt:v=>v.toFixed(2),sub:"應在 0.1–0.9 V 間擺動"},
   {g:"fuel",pid:"15",k:"o2s2v",label:"後含氧電壓",unit:"V",fmt:v=>v.toFixed(2),sub:"觸媒正常時較穩定"},
   {g:"fuel",pid:"5E",k:"fuelRate",label:"燃油流量",unit:"L/h",fmt:v=>v.toFixed(2),sub:"ECU 直接回報"},
   {g:"fuel",pid:"0A",k:"fuelp",label:"燃油壓力",unit:"kPa",fmt:v=>v.toFixed(0)},
-  {g:"fuel",pid:"23",k:"rail",label:"油軌壓力",unit:"kPa",fmt:v=>v.toFixed(0)},
+  {g:"fuel",pid:"23",k:"rail",label:"共軌壓力",unit:"MPa",fmt:v=>(v/1000).toFixed(1)},
   {g:"air",pid:"10",k:"maf",label:"空氣流量",unit:"g/s",fmt:v=>v.toFixed(1)},
   {g:"air",pid:"0B",k:"map",label:"進氣歧管壓力",unit:"kPa",fmt:v=>v.toFixed(0)},
-  {g:"air",pid:"0B",k:"vac",label:"進氣真空",unit:"kPa",fmt:v=>v.toFixed(0),sub:"數值越高越省油"},
+  {g:"air",pid:"0B",k:"vac",label:"進氣真空",unit:"kPa",fmt:v=>v.toFixed(0),sub:"數值越高越省油",only:"gas"},
+  {g:"air",pid:"0B",k:"boost",label:"渦輪增壓",unit:"kPa",fmt:v=>v.toFixed(0),sub:"高於大氣壓的部分",only:"diesel"},
   {g:"air",pid:"43",k:"absLoad",label:"絕對負載",unit:"%",fmt:v=>v.toFixed(0)},
   {g:"air",pid:"45",k:"relTps",label:"相對節氣門",unit:"%",fmt:v=>v.toFixed(0)},
   {g:"air",pid:"49",k:"pedal",label:"油門踏板",unit:"%",fmt:v=>v.toFixed(0)},
@@ -530,16 +547,23 @@ document.querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>setT
 
 /* ---------- fuel ---------- */
 function fuelLph(){
+  S.fuelEst=false;
   if(!S.rpm) return 0;
   if(S.fuelRate!=null && isSup("5E")) return S.fuelRate;
   if(S.load!=null && S.load<10 && S.rpm>1300 && S.speed>15) return 0; // decel fuel cut
+  if(CAR.diesel){
+    if(S.load==null) return null;
+    S.fuelEst=true;
+    const mg=CAR.mgIdle+(CAR.mgMax-CAR.mgIdle)*Math.min(S.load,100)/100;
+    return (S.rpm/2*CAR.cyl*60)*mg/1e3/CAR.fuelD;   // injections/h × g → L/h
+  }
   let maf = (S.maf!=null && isSup("10")) ? S.maf : null;
   if(maf==null && S.map!=null){
     const T=(S.iat ?? 30)+273.15;
-    maf=(S.rpm/120)*(S.map*DISP/(8.314*T))*28.97*VE;
+    maf=(S.rpm/120)*(S.map*CAR.disp/(8.314*T))*28.97*CAR.ve;
   }
   if(maf==null) return null;
-  return maf*3600/(AFR*FUEL_D);
+  return maf*3600/(CAR.afr*CAR.fuelD);
 }
 
 /* ---------- levels ---------- */
@@ -550,7 +574,7 @@ function level(k,v){
     case "volt": if(v<11.8||v>15.2) return ["crit",v>15.2?"過充":"電壓過低"]; if(run&&v<13.2) return ["warn","充電偏低"]; if(!run&&v<12.3) return ["warn","電瓶偏弱"]; return ["ok",run?"充電中":"正常"];
     case "iat": if(v>=65) return ["warn","偏高"]; return ["ok","正常"];
     case "load": if(v>=85) return ["info","高負載"]; return ["ok","—"];
-    case "inst": return ["", S.speed<3?"怠速 L/h":"即時"];
+    case "inst": return ["", S.speed<3?(S.fuelEst?"怠速 · 估算":"怠速 L/h"):(S.fuelEst?"估算":"即時")];
     case "avg": return ["", trip.dist<0.5?"累積中":"本趟"];
   }
   return ["",""];
@@ -599,6 +623,7 @@ function sample(){
   S.inst=(lph==null)?null:(S.speed<3?lph:(lph<0.05?99.9:Math.min(S.speed/lph,99.9)));
   S.avg=trip.fuel>0.01?trip.dist/trip.fuel:null;
   S.vac = S.map!=null ? Math.max(0,(S.baro ?? 101)-S.map) : null;
+  S.boost = S.map!=null ? Math.max(0,S.map-(S.baro ?? 101)) : null;
   if(S.speed===0 && S.rpm>400){ if(!S._stopT) S._stopT=now; } else S._stopT=0;
   if(S._stopT && now-S._stopT>4000 && S.rpm<1400 && (S.tps??0)<25){ idleBuf.push(S.rpm); if(idleBuf.length>30) idleBuf.shift(); }
   if(idleBuf.length>=8){ const m=idleBuf.reduce((a,b)=>a+b,0)/idleBuf.length; S.idleJit=Math.sqrt(idleBuf.reduce((a,b)=>a+(b-m)*(b-m),0)/idleBuf.length); }
@@ -627,7 +652,7 @@ function render(){
   });
   // engine tiles
   ENG.forEach(t=>{
-    const el=$(t.id); const sup=isSup(t.pid); show(el,sup); if(!sup) return;
+    const el=$(t.id); const sup=isSup(t.pid) && (!t.only || t.only===(CAR.diesel?"diesel":"gas")); show(el,sup); if(!sup) return;
     const v=S[t.k];
     if(v==null||!isFinite(v)){ $(t.id+"v").textContent="--"; el.dataset.l=""; show($(t.id+"s"),false); return; }
     $(t.id+"v").textContent=t.fmt(v);
@@ -641,7 +666,7 @@ function render(){
 
   // dash bars
   $("tpsV").textContent=S.tps==null?"--":S.tps.toFixed(0); $("tpsB").style.width=(S.tps??0)+"%";
-  $("mapV").textContent=S.map==null?"--":S.map.toFixed(0); $("mapB").style.width=Math.min((S.map??0)/105*100,100)+"%";
+  $("mapV").textContent=S.map==null?"--":S.map.toFixed(0); $("mapB").style.width=Math.min((S.map??0)/CAR.mapMax*100,100)+"%";
   $("spd").textContent=Math.round(S.speed||0);
   $("corrV").textContent=(spdCorr>0?"+":"")+spdCorr.toFixed(1)+"%";
   $("corrV").dataset.on = spdCorr!==0 ? "1" : "";
@@ -668,7 +693,7 @@ function render(){
   show($("fuelBox"),isSup("2F"));
   if(S.fuelLvl!=null){ $("fuelLvlV").textContent=S.fuelLvl.toFixed(0); $("fuelLvlB").style.width=S.fuelLvl+"%";
     $("fuelLvlB").style.background = S.fuelLvl<12?C.warn:C.accent;
-    $("fuelLvlL").textContent=`約 ${(S.fuelLvl/100*TANK_L).toFixed(0)} L` + (S.avg?` · 可再跑約 ${Math.round(S.fuelLvl/100*TANK_L*S.avg)} km`:""); }
+    $("fuelLvlL").textContent=`約 ${(S.fuelLvl/100*CAR.tank).toFixed(0)} L` + (S.avg?` · 可再跑約 ${Math.round(S.fuelLvl/100*CAR.tank*S.avg)} km`:""); }
   ENV.forEach((r,i)=>{ const sup=r.pid==="ATRV"||isSup(r.pid); show($("env"+i),sup); if(sup) $("env"+i+"v").textContent=r.v()??"--"; });
 
   // diag: MIL, readiness, info
@@ -687,12 +712,13 @@ function render(){
 
 const MON_CONT=[["失火偵測",0],["燃油系統",1],["綜合元件",2]];
 const MON_NC=[["觸媒",0],["觸媒加熱",1],["蒸發系統",2],["二次空氣",3],["含氧感知器",5],["含氧加熱器",6],["EGR／VVT",7]];
+const MON_CI=[["NMHC 觸媒",0],["NOx／SCR",1],["增壓系統",3],["排氣感知器",5],["DPF",6],["EGR／VVT",7]];
 function renderMon(){
   const m=S.mon, box=$("monBox");
   if(!m){ box.innerHTML=`<span class="muted">連線後顯示各項自我檢測是否完成。</span>`; $("monSum").textContent=""; return; }
   const [,B,Cb,D]=m; const items=[];
   MON_CONT.forEach(([n,i])=>{ if(B&(1<<i)) items.push([n,!(B&(1<<(i+4)))]); });
-  MON_NC.forEach(([n,i])=>{ if(Cb&(1<<i)) items.push([n,!(D&(1<<i))]); });
+  (B&0x08?MON_CI:MON_NC).forEach(([n,i])=>{ if(Cb&(1<<i)) items.push([n,!(D&(1<<i))]); });
   const done=items.filter(x=>x[1]).length;
   $("monSum").textContent=items.length?`${done} / ${items.length} 完成`:"";
   box.innerHTML = items.length ? items.map(([n,ok])=>`<div class="${ok?"y":"n"}"><span>${n}</span><i>${ok?"完成":"未完成"}</i></div>`).join("") : `<span class="muted">ECU 未回報就緒項目。</span>`;
@@ -704,7 +730,7 @@ let dispRpm=0;
   dispRpm += ((S.rpm||0)-dispRpm)*0.25;
   if(tab==="dash"){
     const av=$("arcVal"); av.setAttribute("d",arc(A0,rpmA(dispRpm)));
-    av.setAttribute("stroke",dispRpm>=REDLINE?C.crit:(dispRpm>=5500?C.warn:C.accent));
+    av.setAttribute("stroke",dispRpm>=REDLINE?C.crit:(dispRpm>=CAR.rpmWarn?C.warn:C.accent));
     $("rpmTxt").textContent=Math.round(dispRpm/10)*10;
   }
   if(tab==="trip" && acc.state==="run") $("accT").innerHTML=((performance.now()-acc.t0)/1000).toFixed(1)+"<small> 秒</small>";
@@ -719,6 +745,7 @@ function setMode(m,txt){
   $("btnDemo").textContent = m==="demo" ? "停止示範" : "示範模式";
   const live = m==="on"||m==="demo";
   $("btnDtc").disabled = $("btnClr").disabled = $("btnInfo").disabled = !live;
+  $("car").disabled = m==="on"||m==="busy";
   render();
 }
 function renderSupList(){
@@ -872,7 +899,7 @@ const DTC_TXT = {
   P0455:"蒸發系統大量洩漏（油箱蓋）", P0456:"蒸發系統微量洩漏", P0457:"油箱蓋未鎖緊",
   P0135:"前含氧感知器加熱器", P0141:"後含氧感知器加熱器", P0113:"進氣溫度感知器電壓過高",
   P0118:"水溫感知器電壓過高", P0562:"系統電壓過低", P0563:"系統電壓過高", P0335:"曲軸位置感知器", P0340:"凸輪軸位置感知器",
-  P0841:"CVT 油壓開關異常", P0868:"CVT 油壓過低", P2646:"VTC/VTEC 油壓開關", P0134:"前含氧感知器無反應", P0137:"後含氧感知器電壓過低",
+  P0134:"前含氧感知器無反應", P0137:"後含氧感知器電壓過低",
 };
 const dtcStr=(a,b)=>"PCBU"[a>>6]+((a>>4)&3)+(a&15).toString(16).toUpperCase()+hex2(b);
 function decodeDtc(resp,svc="43"){
@@ -899,7 +926,7 @@ function showDtc(){
   const el=$("dtcList"), ffb=$("ffBox");
   if(!dtcState){ el.innerHTML=`<span class="muted">連線後按「讀取」查詢 ECU 故障碼。</span>`; ffb.hidden=true; return; }
   const {codes,ff,demo}=dtcState;
-  el.innerHTML = codes.length ? codes.map(([c,kind])=>`<div class="dtc"><code>${c}</code><span>${DTC_TXT[c]||"請查詢原廠維修手冊"}</span><em>${kind}</em></div>`).join("") + (demo?`<span class="muted">示範資料</span>`:"")
+  el.innerHTML = codes.length ? codes.map(([c,kind])=>`<div class="dtc"><code>${c}</code><span>${CAR.dtc[c]||DTC_TXT[c]||"請查詢原廠維修手冊"}</span><em>${kind}</em></div>`).join("") + (demo?`<span class="muted">示範資料</span>`:"")
     : `<span class="muted">沒有故障碼。</span>`;
   if(ff && Object.keys(ff.vals).length){
     ffb.hidden=false; $("ffTitle").textContent=`凍結資料：${ff.code} 發生當下的車況`;
@@ -907,7 +934,7 @@ function showDtc(){
   } else ffb.hidden=true;
 }
 $("btnDtc").onclick=async()=>{
-  if(mode==="demo"){ dtcState={codes:[["P0457","確認"]],ff:{code:"P0457",vals:{"0C":812,"0D":0,"05":86,"04":21,"06":1.6,"07":2.3,"0B":31,"0F":34}},demo:true}; showDtc(); return; }
+  if(mode==="demo"){ const c=CAR.demoDtc; dtcState={codes:[[c,"確認"]],ff:{code:c,vals:CAR.diesel?{"0C":1720,"0D":62,"05":88,"04":38,"0B":142,"0F":36}:{"0C":812,"0D":0,"05":86,"04":21,"06":1.6,"07":2.3,"0B":31,"0F":34}},demo:true}; showDtc(); return; }
   $("dtcList").innerHTML=`<span class="muted">讀取中…</span>`;
   const r3=await elm.send("03",5000); log("03 → "+(r3??"逾時"));
   const r7=await elm.send("07",5000); log("07 → "+(r7??"逾時"));
@@ -930,10 +957,12 @@ $("btnInfo").onclick=async()=>{ if(mode==="on"){ needRare=true; if(!S.vin) S.vin
 
 /* ---------- demo ---------- */
 const DEMO_SUP="01 04 05 06 07 0B 0C 0D 0E 0F 11 13 15 1C 1F 20 21 2E 2F 30 31 33 34 3C 40 42 43 44 45 46 47 49 4A 4C 4D 4E 51".split(" ");
+const DEMO_SUP_D="01 04 05 0B 0C 0D 0F 10 11 1C 1F 20 21 23 2F 30 31 33 40 42 43 46 49 4D 4E 51".split(" ");
 function startDemo(){
-  if(elm) stopAll(); resetState(); SUP=new Set(DEMO_SUP); dtcState=null; showDtc(); renderSupList();
-  Object.assign(S,{coolant:46,iat:31,volt:14.2,mil:false,dtcCount:0,load:20,tps:12,map:32,mon:[0x00,0x07,0x65,0x04],
-    vin:"DEMO0000000000000",obdstd:1,fuelType:1,clrDist:1834,clrTime:3120,warmups:96,milDist:0,milTime:0,fuelLvl:63,ambient:27,baro:100,runtime:0,cat:250,ecuV:14.1});
+  if(elm) stopAll(); resetState(); SUP=new Set(CAR.diesel?DEMO_SUP_D:DEMO_SUP); dtcState=null; showDtc(); renderSupList();
+  const dz=CAR.diesel;
+  Object.assign(S,{coolant:46,iat:31,volt:14.2,mil:false,dtcCount:0,load:20,tps:12,map:dz?101:32,mon:dz?[0x00,0x0F,0xE9,0x40]:[0x00,0x07,0x65,0x04],
+    vin:"DEMO0000000000000",obdstd:dz?6:1,fuelType:dz?4:1,clrDist:1834,clrTime:3120,warmups:96,milDist:0,milTime:0,fuelLvl:63,ambient:27,baro:100,runtime:0,cat:250,ecuV:14.1});
   let target=0,t=0;
   setMode("demo");
   demoTimer=setInterval(()=>{
@@ -943,12 +972,13 @@ function startDemo(){
     const d=target-S.speedRaw, up=d>2;
     S.speedRaw=Math.max(0,S.speedRaw+Math.sign(d)*Math.min(Math.abs(d),up?(target===100?1.9:0.9):1.6));
     if(S.speedRaw>=100) target=60;
-    const base=S.speedRaw<2?760:1100+S.speedRaw*14, rt=up?base+1700+Math.random()*900:base;
+    const base=S.speedRaw<2?CAR.idle:(dz?950+S.speedRaw*9:1100+S.speedRaw*14), rt=up?base+(dz?900+Math.random()*600:1700+Math.random()*900):base;
     S.rpm+=(rt-S.rpm)*0.15+(Math.random()-.5)*(S.speedRaw<2?24:30);
     S.tps=up?30+Math.random()*25:(d<-2?10:14+S.speedRaw*0.08);
     S.relTps=Math.max(0,S.tps-11); S.pedal=up?S.tps+5:(d<-2?0:8+S.speedRaw*0.1); S.cmdTps=S.tps;
     S.load=d<-2&&S.speedRaw>15?5:(up?55+Math.random()*25:18+S.speedRaw*0.2); S.absLoad=S.load*0.9;
-    S.map=25+S.load*0.75;
+    S.map=dz?101+Math.max(0,S.load-25)*1.9:25+S.load*0.75;
+    if(dz){ S.maf=S.rpm*CAR.disp/120*1.18*(S.map/101)*CAR.ve; S.rail=30000+S.load*1300+(Math.random()-.5)*2000; }
     S.coolant=Math.min(S.coolant+(S.coolant<89?0.06:0)+(Math.random()-.5)*0.05,92);
     S.iat=30+(S.speedRaw<5?6:0)+Math.sin(t/20);
     S.volt=14.1+(Math.random()-.5)*0.15; S.ecuV=S.volt-0.1;
@@ -972,6 +1002,21 @@ $("btnDemo").onclick=()=>{ if(mode==="demo"){ stopDemo(); releaseWake(); resetSt
 $("btnReset").onclick=()=>{ Object.assign(trip,{dist:0,fuel:0,time:0,last:0,maxS:0,maxR:0,maxC:null}); HIST.avg.length=0; render(); };
 $("btnAccClr").onclick=()=>{ Object.assign(acc,{last:null,best:null,split60:null,hist:[]}); render(); };
 $("btnFs").onclick=async()=>{ try{ document.fullscreenElement?await document.exitFullscreen():await document.documentElement.requestFullscreen(); }catch(e){} };
+
+const carSel=$("car");
+carSel.innerHTML=Object.entries(CARS).map(([id,c])=>`<option value="${id}">${c.name}</option>`).join("");
+carSel.value=carId;
+carSel.onchange=()=>{
+  if(mode==="on"||mode==="busy"){ carSel.value=carId; return; }
+  carId=carSel.value; CAR=CARS[carId]; REDLINE=CAR.redline; RPM_MAX=CAR.rpmMax;
+  try{ localStorage.setItem("fitdash.car",carId); }catch(e){}
+  drawTach(); dispRpm=0;
+  Object.assign(trip,{dist:0,fuel:0,time:0,last:0,maxS:0,maxR:0,maxC:null});
+  Object.assign(acc,{state:"wait",last:null,best:null,split60:null,hist:[]});
+  dtcState=null; showDtc();
+  setCorr(0);
+  if(mode==="demo"){ stopDemo(); startDemo(); } else { resetState(); render(); }
+};
 
 let saved="dash"; try{ saved=localStorage.getItem("fitdash.tab")||"dash"; }catch(e){}
 setTab(["dash","eng","trip","diag"].includes(saved)?saved:"dash");

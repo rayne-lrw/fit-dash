@@ -1,6 +1,6 @@
 {
-  "name": "Fit 戰情面板",
-  "short_name": "Fit 面板",
+  "name": "車況面板",
+  "short_name": "車況面板",
   "start_url": "./",
   "scope": "./",
   "display": "fullscreen",

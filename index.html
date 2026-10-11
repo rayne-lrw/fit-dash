@@ -42,6 +42,7 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .carsel:hover{border-color:var(--accent)}
 .carsel:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .carsel:disabled{opacity:.6;cursor:not-allowed}
+.carsel.sm{font-size:14px;padding-block:7px}
 .tabs{display:flex;gap:2px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:3px;margin-right:auto}
 .tab{padding:6px 16px;border-radius:7px;border:0;background:transparent;color:var(--dim);font-size:15px;font-weight:500}
 .tab:hover{color:var(--fg)}
@@ -195,6 +196,10 @@ details summary{cursor:pointer;color:var(--dim);font-size:13px}
     <button class="tab" role="tab" id="tab-diag" data-p="diag">診斷</button>
   </nav>
   <span class="pill" id="pill" data-s="off"><i></i><span id="pillTxt">未連線</span></span>
+  <select class="carsel sm" id="tport" aria-label="連線方式" title="連線方式" hidden>
+    <option value="ble">BLE</option>
+    <option value="serial">傳統藍牙／USB</option>
+  </select>
   <button class="btn primary" id="btnConn">連接 OBD</button>
   <button class="btn" id="btnDemo">示範模式</button>
   <button class="btn" id="btnFs" title="全螢幕">全螢幕</button>
@@ -314,7 +319,10 @@ details summary{cursor:pointer;color:var(--dim);font-size:13px}
 <details>
   <summary>使用說明與通訊紀錄</summary>
   <ul class="help">
-    <li>需要 <b>BLE（藍牙 4.0 以上低功耗）</b> 版 ELM327 接頭，例如 Vgate iCar Pro 2S、vLinker MC+、Veepeak BLE+。傳統藍牙與 WiFi 版瀏覽器無法連線。</li>
+    <li>此瀏覽器支援：<b id="capLine">檢查中…</b></li>
+    <li><b>BLE（藍牙 4.0 以上低功耗）</b>版 ELM327 接頭最通用，例如 Vgate iCar Pro 2S、vLinker MC+、Veepeak BLE+。Android Chrome／Edge 可用，iOS 請用 Bluefy。</li>
+    <li><b>傳統藍牙</b>版接頭要透過瀏覽器的序列埠功能連線：電腦版 Chrome／Edge 可用，Android Chrome 要較新版本，iOS 不支援。請先到系統藍牙設定配對接頭（PIN 通常是 1234 或 0000），再回來選「傳統藍牙／USB」連線。第二次起會自動連上次的接頭；連不上時再按一次會讓你重選。USB 線材版 ELM327 也走這個方式。</li>
+    <li>WiFi 版接頭瀏覽器無法連線。</li>
     <li>不用先到系統設定配對。發動引擎後按「連接 OBD」，在清單選接頭（可能只顯示一串位址）。</li>
     <li>連線時面板會先查詢這台車支援哪些項目，不支援的會自動隱藏、不會讀取。</li>
     <li>油耗：ECU 有提供燃油流量就直接用；沒有的話，汽油車用空氣流量或進氣壓力推算（誤差約 ±10%），柴油車用引擎負載估算（誤差較大，油耗磚會標「估算」）。</li>
@@ -705,7 +713,7 @@ function render(){
 
   // alert strip
   const box=$("alerts");
-  if(mode==="off") box.innerHTML=`<span class="chip info">插上 BLE OBD 接頭並發動引擎，再按「連接 OBD」；或先用示範模式查看畫面</span>`;
+  if(mode==="off") box.innerHTML=`<span class="chip info">插上 OBD 接頭並發動引擎，再按「連接 OBD」；或先用示範模式查看畫面</span>`;
   else if(!alerts.length) box.innerHTML=`<span class="chip ok">車況正常</span>`;
   else box.innerHTML=alerts.slice(0,5).map(([l,t])=>`<span class="chip ${l}">${t}</span>`).join("");
 }
@@ -745,7 +753,7 @@ function setMode(m,txt){
   $("btnDemo").textContent = m==="demo" ? "停止示範" : "示範模式";
   const live = m==="on"||m==="demo";
   $("btnDtc").disabled = $("btnClr").disabled = $("btnInfo").disabled = !live;
-  $("car").disabled = m==="on"||m==="busy";
+  $("car").disabled = $("tport").disabled = m==="on"||m==="busy";
   render();
 }
 function renderSupList(){
@@ -757,14 +765,35 @@ function renderSupList(){
 }
 $("btnSup").onclick=()=>{ renderSupList(); $("supList").hidden=!$("supList").hidden; };
 
-/* ---------- ELM327 over BLE ---------- */
-const SERVICES = [0xfff0,0xffe0,0x18f0,0xffb0,0xfee0,"e7810a71-73ae-499d-8c15-faa9aef0c3f2"];
+/* ---------- ELM327 transport: shared command/prompt handling ---------- */
 class Elm {
   constructor(){ this.buf=""; this.waiter=null; this.chain=Promise.resolve(); this.dec=new TextDecoder(); this.enc=new TextEncoder(); }
+  feed(text){
+    this.buf+=text;
+    const i=this.buf.indexOf(">");
+    if(i>=0&&this.waiter){ const out=this.buf.slice(0,i); this.buf=this.buf.slice(i+1); const wt=this.waiter; this.waiter=null; wt(out); }
+  }
+  lost(what){ if(elm!==this) return; log(what+"已斷線"); if(mode==="on"||mode==="busy") stopAll("連線中斷"); }
+  send(cmd,timeout=2500){
+    const run=()=>new Promise(async res=>{
+      this.buf="";
+      const t=setTimeout(()=>{ this.waiter=null; res(null); },timeout);
+      this.waiter=s=>{ clearTimeout(t); res(s); };
+      try{ await this.write(this.enc.encode(cmd+"\r")); }
+      catch(e){ clearTimeout(t); this.waiter=null; res(null); }
+    });
+    const p=this.chain.then(run); this.chain=p.catch(()=>{});
+    return p.then(r=>r==null?null:r.replace(/\r/g,"\n").split("\n").map(x=>x.trim()).filter(x=>x&&!/^SEARCHING/i.test(x)).join("\n"));
+  }
+}
+
+/* ---------- BLE (Web Bluetooth) ---------- */
+const SERVICES = [0xfff0,0xffe0,0x18f0,0xffb0,0xfee0,"e7810a71-73ae-499d-8c15-faa9aef0c3f2"];
+class ElmBle extends Elm {
   async open(){
     this.dev=await navigator.bluetooth.requestDevice({acceptAllDevices:true,optionalServices:SERVICES});
     log("裝置："+(this.dev.name||this.dev.id));
-    this.dev.addEventListener("gattserverdisconnected",()=>{ log("藍牙已斷線"); if(mode==="on"||mode==="busy") stopAll("連線中斷"); });
+    this.dev.addEventListener("gattserverdisconnected",()=>this.lost("藍牙"));
     const server=await this.dev.gatt.connect();
     for(const s of await server.getPrimaryServices()){
       let tx=null, rx=null;
@@ -775,28 +804,53 @@ class Elm {
     }
     if(!this.tx) throw new Error("找不到 ELM327 的通訊通道，接頭可能不是 BLE 版");
     await this.rx.startNotifications();
-    this.rx.addEventListener("characteristicvaluechanged",e=>{
-      this.buf+=this.dec.decode(e.target.value);
-      const i=this.buf.indexOf(">");
-      if(i>=0&&this.waiter){ const out=this.buf.slice(0,i); this.buf=this.buf.slice(i+1); const wt=this.waiter; this.waiter=null; wt(out); }
-    });
+    this.rx.addEventListener("characteristicvaluechanged",e=>this.feed(this.dec.decode(e.target.value,{stream:true})));
   }
-  send(cmd,timeout=2500){
-    const run=()=>new Promise(async res=>{
-      this.buf="";
-      const t=setTimeout(()=>{ this.waiter=null; res(null); },timeout);
-      this.waiter=s=>{ clearTimeout(t); res(s); };
-      const data=this.enc.encode(cmd+"\r");
-      try{
-        if(this.tx.properties.writeWithoutResponse&&this.tx.writeValueWithoutResponse) await this.tx.writeValueWithoutResponse(data);
-        else await this.tx.writeValue(data);
-      }catch(e){ clearTimeout(t); this.waiter=null; res(null); }
-    });
-    const p=this.chain.then(run); this.chain=p.catch(()=>{});
-    return p.then(r=>r==null?null:r.replace(/\r/g,"\n").split("\n").map(x=>x.trim()).filter(x=>x&&!/^SEARCHING/i.test(x)).join("\n"));
+  async write(data){
+    if(this.tx.properties.writeWithoutResponse&&this.tx.writeValueWithoutResponse) await this.tx.writeValueWithoutResponse(data);
+    else await this.tx.writeValue(data);
   }
   close(){ try{ this.dev?.gatt?.disconnect(); }catch(e){} }
 }
+
+/* ---------- Classic Bluetooth SPP / USB (Web Serial) ---------- */
+const SPP = "00001101-0000-1000-8000-00805f9b34fb";
+let serialPick = false;    // true → skip the remembered port and show the picker
+class ElmSerial extends Elm {
+  async open(){
+    let port=null;
+    if(!serialPick){ const ports=await navigator.serial.getPorts(); port=ports[ports.length-1]||null; if(port) log("使用上次授權的接頭"); }
+    serialPick=false;
+    if(!port) port=await navigator.serial.requestPort({allowedBluetoothServiceClassIds:[SPP]});
+    const info=port.getInfo?.()||{};
+    log("裝置："+(info.bluetoothServiceClassId?"藍牙序列埠":info.usbVendorId?`USB ${hex2(info.usbVendorId>>8)}${hex2(info.usbVendorId&255)}`:"序列埠"));
+    this.port=port;
+    try{ await port.open({baudRate:38400}); }
+    catch(e){ serialPick=true; throw new Error("接頭開啟失敗（"+e.message+"）。確認接頭已配對且通電；再按一次「連接 OBD」可重選接頭"); }
+    this.reader=port.readable.getReader(); this.writer=port.writable.getWriter();
+    (async()=>{
+      try{ for(;;){ const {value,done}=await this.reader.read(); if(done) break; if(value) this.feed(this.dec.decode(value,{stream:true})); } }catch(e){}
+      if(!this.closing) this.lost("序列埠");
+    })();
+  }
+  async write(data){ await this.writer.write(data); }
+  async close(){
+    this.closing=true;
+    try{ await this.reader?.cancel(); }catch(e){}
+    try{ this.reader?.releaseLock(); }catch(e){}
+    try{ this.writer?.releaseLock(); }catch(e){}
+    try{ await this.port?.close(); }catch(e){}
+  }
+}
+
+/* ---------- transport choice ---------- */
+const CAN = {ble:!!navigator.bluetooth, serial:!!navigator.serial};
+let tport = CAN.ble ? "ble" : "serial";
+try{ const t=localStorage.getItem("fitdash.tport"); if(CAN[t]) tport=t; }catch(e){}
+$("capLine").textContent=`BLE ${CAN.ble?"✅":"❌"}　傳統藍牙／USB ${CAN.serial?"✅":"❌"}`;
+$("tport").hidden = !(CAN.ble && CAN.serial);
+$("tport").value = tport;
+$("tport").onchange=()=>{ tport=$("tport").value; try{ localStorage.setItem("fitdash.tport",tport); }catch(e){} };
 const bad = r => !r || /NO DATA|ERROR|UNABLE|STOPPED|\?/i.test(r);
 function bytesFor(resp,pid,prefix="41",skip=0){
   if(bad(resp)) return null;
@@ -854,9 +908,10 @@ function buildLists(){
 }
 
 async function connect(){
-  if(!navigator.bluetooth){ setMode("off","瀏覽器不支援藍牙"); log("navigator.bluetooth 不存在：請用 Android Chrome / Edge，或 iOS 的 Bluefy"); return; }
+  if(!CAN.ble && !CAN.serial){ setMode("off","瀏覽器不支援藍牙"); log("此瀏覽器沒有 Web Bluetooth 也沒有 Web Serial：請用 Android Chrome / Edge、電腦版 Chrome，或 iOS 的 Bluefy（僅 BLE）"); return; }
   stopDemo(); resetState(); SUP=null; dtcState=null; showDtc(); setMode("busy");
-  elm=new Elm();
+  elm = tport==="serial" ? new ElmSerial() : new ElmBle();
+  log("連線方式："+(tport==="serial"?"傳統藍牙／USB（序列埠）":"BLE"));
   try{
     await elm.open();
     for(const c of ["ATZ","ATE0","ATL0","ATS0","ATH0","ATAT1","ATSP0"]){ const r=await elm.send(c,c==="ATZ"?4000:2000); log(c+" → "+(r??"逾時")); }
@@ -870,7 +925,7 @@ async function connect(){
     needRare=true;
     pollLoop();
   }catch(e){
-    log("失敗："+e.message); elm?.close(); elm=null; SUP=null;
+    log("失敗："+e.message); const old=elm; elm=null; old?.close(); SUP=null;
     const msg=e.name==="NotFoundError"?"已取消選擇":(e.name==="SecurityError"||/permission|policy/i.test(e.message))?"此頁面環境封鎖藍牙":"連線失敗";
     setMode("off",msg);
     if(msg==="此頁面環境封鎖藍牙") log("請改用 GitHub Pages 上的網址，在 Chrome 開啟");
@@ -889,7 +944,7 @@ async function pollLoop(){
     sample(); i++;
   }
 }
-function stopAll(txt){ elm?.close(); elm=null; releaseWake(); setMode("off",txt); }
+function stopAll(txt){ const old=elm; elm=null; old?.close(); releaseWake(); setMode("off",txt); }
 
 /* ---------- DTC + freeze frame ---------- */
 const DTC_TXT = {

@@ -60,6 +60,7 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .btn.danger{border-color:color-mix(in srgb,var(--crit) 60%,var(--line));color:var(--crit)}
 .btn.sm{padding:4px 10px;font-size:13px}
 .btn:disabled{opacity:.4;cursor:not-allowed}
+.toast{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:10;display:flex;align-items:center;gap:10px;max-width:calc(100% - 32px);padding:8px 8px 8px 14px;border-radius:10px;background:var(--panel2);border:1px solid var(--accent);box-shadow:0 6px 24px #0008;font-size:14px}
 
 /* alert strip */
 .alerts{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;min-height:32px}
@@ -203,6 +204,7 @@ details summary{cursor:pointer;color:var(--dim);font-size:13px}
   <button class="btn primary" id="btnConn">連接 OBD</button>
   <button class="btn" id="btnDemo">示範模式</button>
   <button class="btn" id="btnFs" title="全螢幕">全螢幕</button>
+  <button class="btn" id="btnInstall" title="安裝到主畫面" hidden>安裝</button>
 </header>
 
 <div class="alerts" id="alerts"></div>
@@ -332,6 +334,12 @@ details summary{cursor:pointer;color:var(--dim);font-size:13px}
   </ul>
   <div class="log" id="log"></div>
 </details>
+
+<div class="toast" id="updToast" role="status" hidden>
+  <span>有新版本</span>
+  <button class="btn sm primary" id="updYes">更新</button>
+  <button class="btn sm" id="updNo">稍後</button>
+</div>
 
 <script>
 (() => {
@@ -1079,12 +1087,44 @@ startDemo();
 })();
 </script>
 <script>
-if ("serviceWorker" in navigator && location.protocol === "https:") {
-  navigator.serviceWorker.register("sw.js").then(() => {
-    const el = document.getElementById("log");
-    if (el) el.textContent += (el.textContent ? "\n" : "") + "離線模式已就緒：之後沒有網路也能打開";
+(() => {
+  const $ = id => document.getElementById(id);
+  const note = t => { const el = $("log"); if (el) el.textContent += (el.textContent ? "\n" : "") + t; };
+
+  // install button: Chrome/Edge fire beforeinstallprompt when the app can be installed and isn't yet
+  let deferred = null;
+  addEventListener("beforeinstallprompt", e => { e.preventDefault(); deferred = e; $("btnInstall").hidden = false; });
+  addEventListener("appinstalled", () => { deferred = null; $("btnInstall").hidden = true; note("已安裝到主畫面"); });
+  $("btnInstall").onclick = async () => {
+    if (!deferred) return;
+    deferred.prompt();
+    const { outcome } = await deferred.userChoice;
+    deferred = null; $("btnInstall").hidden = true;
+    note(outcome === "accepted" ? "開始安裝…" : "已取消安裝");
+  };
+
+  if (!("serviceWorker" in navigator) || location.protocol !== "https:") return;
+  // update banner: a new sw.js waits until the driver taps 更新, then the page reloads once
+  let reloading = false, dismissed = false;
+  const offer = reg => { if (reg.waiting && navigator.serviceWorker.controller && !dismissed) $("updToast").hidden = false; };
+  $("updYes").onclick = async () => {
+    const reg = await navigator.serviceWorker.getRegistration();
+    $("updToast").hidden = true;
+    reg?.waiting?.postMessage("skipWaiting");
+  };
+  $("updNo").onclick = () => { dismissed = true; $("updToast").hidden = true; };
+  navigator.serviceWorker.addEventListener("controllerchange", () => { if (!reloading) { reloading = true; location.reload(); } });
+  navigator.serviceWorker.register("sw.js").then(reg => {
+    note("離線模式已就緒：之後沒有網路也能打開");
+    offer(reg);
+    reg.addEventListener("updatefound", () => {
+      const sw = reg.installing;
+      sw?.addEventListener("statechange", () => { if (sw.state === "installed") offer(reg); });
+    });
+    // installed apps can stay open for hours — look for a new version when brought back to the front
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") reg.update().catch(() => {}); });
   }).catch(() => {});
-}
+})();
 </script>
 <script data-goatcounter="https://rayne-lrw.goatcounter.com/count"
         async src="//gc.zgo.at/count.js"></script>

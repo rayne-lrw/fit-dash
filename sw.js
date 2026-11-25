@@ -1,5 +1,5 @@
 // 車況面板 — 離線快取
-const VERSION = "fit-dash-v7";
+const VERSION = "fit-dash-v8";
 const SHELL = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png", "./icon-maskable-192.png", "./icon-maskable-512.png"];
 
 // 新版先裝好待命，等頁面按「更新」才接手（避免開車途中突然重新載入）
